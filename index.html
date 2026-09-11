@@ -6,8 +6,8 @@
   <title>EPUB zu PDF Konverter</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.2/jspdf.umd.min.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.2/dist/jspdf.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
   <style>
     .pdf-render-page {
       background-color: #ffffff !important;
@@ -353,6 +353,11 @@
 
     convertBtn.addEventListener('click', async () => {
       if (!currentFile) return;
+
+      if (typeof JSZip === 'undefined' || typeof window.jspdf === 'undefined' || typeof html2canvas === 'undefined') {
+        updateStatus('Fehler: Eine benötigte Bibliothek (JSZip/jsPDF/html2canvas) konnte nicht geladen werden. Bitte Internetverbindung/Werbeblocker prüfen und die Seite neu laden.', 100, true);
+        return;
+      }
 
       convertBtn.disabled = true;
       renderContainer.innerHTML = '';
