@@ -1,0 +1,503 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>EPUB zu PDF Konverter</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.2/jspdf.umd.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+  <style>
+    .pdf-render-page {
+      background-color: #ffffff !important;
+      color: #111827 !important;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      line-height: 1.6;
+    }
+    .pdf-render-page h1, .pdf-render-page h2, .pdf-render-page h3, .pdf-render-page h4 {
+      color: #000000 !important;
+      font-weight: bold;
+      margin-top: 1.25rem;
+      margin-bottom: 0.75rem;
+    }
+    .pdf-render-page p {
+      margin-bottom: 0.85rem;
+      text-align: justify;
+    }
+    .pdf-render-page img {
+      max-width: 100% !important;
+      height: auto !important;
+      display: block;
+      margin: 1rem auto;
+    }
+    .home-fab {
+      position: fixed;
+      right: 1.25rem;
+      bottom: 1.25rem;
+      width: 3rem;
+      height: 3rem;
+      border-radius: 9999px;
+      background-color: #f1f5f9;
+      color: #0f172a;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.4), 0 8px 10px -6px rgba(0, 0, 0, 0.4);
+      transition: transform 0.15s ease, background-color 0.15s ease;
+      z-index: 50;
+    }
+    .home-fab:hover {
+      background-color: #ffffff;
+      transform: scale(1.05);
+    }
+  </style>
+</head>
+<body class="bg-slate-900 text-slate-200 font-sans min-h-screen p-4 md:p-8 flex flex-col items-center justify-center">
+
+  <div class="w-full max-w-2xl space-y-6">
+    <header class="text-center space-y-2">
+      <h1 class="text-3xl md:text-4xl font-bold text-white bg-clip-text text-transparent bg-gradient-to-r from-blue-400 to-emerald-400">
+        EPUB zu PDF Konverter
+      </h1>
+      <p class="text-slate-400 text-sm md:text-base">
+        E-Books (EPUB 2 &amp; 3) schnell und lokal im Browser in saubere PDFs umwandeln.
+      </p>
+    </header>
+
+    <main class="bg-slate-800 rounded-2xl border border-slate-700 p-6 md:p-8 space-y-6 shadow-xl">
+      <!-- File Selector Dropzone -->
+      <div>
+        <label class="block text-sm font-medium text-slate-300 mb-2">EPUB-Datei auswählen</label>
+        <div id="dropZone" class="border-2 border-dashed border-slate-600 hover:border-blue-500 rounded-xl p-6 text-center cursor-pointer transition-colors bg-slate-900/50">
+          <input type="file" id="epubFile" accept=".epub,application/epub+zip" class="hidden" />
+          <svg xmlns="http://www.w3.org/2000/svg" class="h-10 w-10 mx-auto text-slate-400 mb-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+          </svg>
+          <p id="fileLabel" class="text-sm text-slate-300 font-medium">Klicke hier oder ziehe eine .epub-Datei herein</p>
+          <p id="fileSubLabel" class="text-xs text-slate-500 mt-1">Unterstützt EPUB 2 und EPUB 3</p>
+        </div>
+      </div>
+
+      <!-- Settings / Hints -->
+      <div class="rounded-lg bg-slate-900/40 border border-slate-700 p-4 space-y-3">
+        <div class="flex items-center justify-between text-xs text-slate-400">
+          <span>Format: <strong class="text-slate-200">DIN A4 (Standard)</strong></span>
+          <span>Typografie: <strong class="text-slate-200">Lesefreundlich (Auto)</strong></span>
+        </div>
+        <details class="text-xs text-slate-400 cursor-pointer">
+          <summary class="hover:text-slate-200 transition-colors">Optionen anpassen (optional)</summary>
+          <div class="grid grid-cols-2 gap-4 mt-3 pt-3 border-t border-slate-700/60">
+            <div>
+              <label for="pageSize" class="block text-slate-300 mb-1">Seitenformat</label>
+              <select id="pageSize" class="w-full bg-slate-900 border border-slate-600 text-white rounded-lg p-2 focus:ring-1 focus:ring-blue-500 text-xs">
+                <option value="a4" selected>DIN A4</option>
+                <option value="a5">DIN A5</option>
+                <option value="letter">Letter</option>
+              </select>
+            </div>
+            <div>
+              <label for="fontSize" class="block text-slate-300 mb-1">Schriftgröße</label>
+              <select id="fontSize" class="w-full bg-slate-900 border border-slate-600 text-white rounded-lg p-2 focus:ring-1 focus:ring-blue-500 text-xs">
+                <option value="13">Kompakt (13px)</option>
+                <option value="15" selected>Standard (15px)</option>
+                <option value="17">Groß (17px)</option>
+              </select>
+            </div>
+          </div>
+        </details>
+      </div>
+
+      <!-- Status Box -->
+      <div id="statusContainer" class="hidden p-4 rounded-lg bg-slate-900/80 border border-slate-700 text-sm space-y-2">
+        <div class="flex items-center justify-between">
+          <span id="statusText" class="text-slate-300 font-medium">Bereit</span>
+          <span id="percentageText" class="text-blue-400 font-semibold"></span>
+        </div>
+        <div class="w-full bg-slate-700 h-2 rounded-full overflow-hidden">
+          <div id="progressBar" class="bg-blue-600 h-full w-0 transition-all duration-150"></div>
+        </div>
+      </div>
+
+      <!-- Action Button -->
+      <button
+        id="convertBtn"
+        disabled
+        class="w-full py-3 px-4 bg-blue-600 hover:bg-blue-500 disabled:opacity-40 disabled:hover:bg-blue-600 disabled:cursor-not-allowed text-white font-semibold rounded-lg shadow-lg transition-all flex items-center justify-center space-x-2"
+      >
+        <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+        </svg>
+        <span>PDF erstellen &amp; herunterladen</span>
+      </button>
+    </main>
+  </div>
+
+  <!-- Off-Screen Render Stage: one chapter/chunk at a time is rendered here and discarded -->
+  <div id="renderContainer" style="position: absolute; left: -99999px; top: 0; width: 800px;"></div>
+
+  <!-- App-Rahmen: Home-Button, einheitlich für alle Mini-Apps -->
+  <a href="../" class="home-fab" title="Zur App-Übersicht" aria-label="Zur App-Übersicht">
+    <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" />
+    </svg>
+  </a>
+
+  <script>
+    const fileInput = document.getElementById('epubFile');
+    const dropZone = document.getElementById('dropZone');
+    const fileLabel = document.getElementById('fileLabel');
+    const fileSubLabel = document.getElementById('fileSubLabel');
+    const convertBtn = document.getElementById('convertBtn');
+    const statusContainer = document.getElementById('statusContainer');
+    const statusText = document.getElementById('statusText');
+    const percentageText = document.getElementById('percentageText');
+    const progressBar = document.getElementById('progressBar');
+    const renderContainer = document.getElementById('renderContainer');
+    const pageSizeSelect = document.getElementById('pageSize');
+    const fontSizeSelect = document.getElementById('fontSize');
+
+    const RENDER_WIDTH_PX = 800;       // Breite des Off-Screen-Renders pro Kapitel
+    const RENDER_SCALE = 2;            // html2canvas-Skalierung (Bildqualität)
+    const MAX_CHUNK_HEIGHT_PX = 8000;  // Sicherheitsgrenze: nie ein zu großes Canvas rendern
+    const PAGE_FORMATS_MM = {
+      a4: [210, 297],
+      a5: [148, 210],
+      letter: [215.9, 279.4],
+    };
+    const MARGIN_MM = [12, 12, 12, 12]; // oben, links, unten, rechts
+
+    let currentFile = null;
+
+    dropZone.addEventListener('click', () => fileInput.click());
+
+    dropZone.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      dropZone.classList.add('border-blue-500', 'bg-slate-800/80');
+    });
+
+    dropZone.addEventListener('dragleave', () => {
+      dropZone.classList.remove('border-blue-500', 'bg-slate-800/80');
+    });
+
+    dropZone.addEventListener('drop', (e) => {
+      e.preventDefault();
+      dropZone.classList.remove('border-blue-500', 'bg-slate-800/80');
+      if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+        handleFileSelection(e.dataTransfer.files[0]);
+      }
+    });
+
+    fileInput.addEventListener('change', (e) => {
+      if (e.target.files && e.target.files.length > 0) {
+        handleFileSelection(e.target.files[0]);
+      }
+    });
+
+    function handleFileSelection(file) {
+      if (!file.name.toLowerCase().endsWith('.epub') && file.type !== 'application/epub+zip') {
+        updateStatus('Bitte wähle eine gültige .epub Datei aus.', 0, true);
+        return;
+      }
+      currentFile = file;
+      fileLabel.textContent = file.name;
+      fileSubLabel.textContent = `${(file.size / (1024 * 1024)).toFixed(2)} MB`;
+      convertBtn.disabled = false;
+      statusContainer.classList.add('hidden');
+    }
+
+    function updateStatus(text, progress = 0, isError = false) {
+      statusContainer.classList.remove('hidden');
+      statusText.textContent = text;
+      statusText.className = isError ? 'text-red-400 font-medium' : 'text-slate-300 font-medium';
+      percentageText.textContent = progress > 0 ? `${Math.round(progress)}%` : '';
+      progressBar.style.width = `${progress}%`;
+      progressBar.className = isError ? 'bg-red-500 h-full' : 'bg-blue-600 h-full transition-all duration-150';
+    }
+
+    function resolveRelativePath(baseFile, relativePath) {
+      const stack = baseFile.split('/');
+      stack.pop();
+      const parts = relativePath.split('/');
+      for (let i = 0; i < parts.length; i++) {
+        if (parts[i] === '.' || parts[i] === '') continue;
+        if (parts[i] === '..') {
+          if (stack.length > 0) stack.pop();
+        } else {
+          stack.push(parts[i]);
+        }
+      }
+      return stack.join('/');
+    }
+
+    function getMimeType(path) {
+      const ext = path.split('.').pop().toLowerCase();
+      switch (ext) {
+        case 'jpg':
+        case 'jpeg': return 'image/jpeg';
+        case 'png': return 'image/png';
+        case 'gif': return 'image/gif';
+        case 'svg': return 'image/svg+xml';
+        case 'webp': return 'image/webp';
+        default: return 'application/octet-stream';
+      }
+    }
+
+    function computePageSize(formatKey, marginMm) {
+      const [widthMm, heightMm] = PAGE_FORMATS_MM[formatKey] || PAGE_FORMATS_MM.a4;
+      const inner = {
+        width: widthMm - marginMm[1] - marginMm[3],
+        height: heightMm - marginMm[0] - marginMm[2],
+      };
+      inner.ratio = inner.height / inner.width;
+      return { width: widthMm, height: heightMm, inner };
+    }
+
+    // Teilt einen bereits ins Layout eingehängten Off-Screen-Container in
+    // mehrere kleinere Container (jeweils unter maxHeightPx) auf, damit nie
+    // ein einzelner html2canvas-Aufruf ein überdimensioniertes Canvas
+    // erzeugen muss. Kindknoten werden verschoben, nicht kopiert - funktioniert
+    // also nur einmal pro Container.
+    function splitIntoRenderChunks(container, maxHeightPx) {
+      const children = Array.from(container.children);
+      if (children.length === 0 || container.scrollHeight <= maxHeightPx) {
+        return [container];
+      }
+
+      container.style.position = 'relative';
+      const chunks = [];
+      let chunk = document.createElement('div');
+      chunk.className = container.className;
+      chunk.style.cssText = container.style.cssText;
+      let chunkStartTop = null;
+
+      children.forEach((child) => {
+        const top = child.offsetTop;
+        const bottom = top + child.offsetHeight;
+        if (chunkStartTop === null) chunkStartTop = top;
+
+        if (bottom - chunkStartTop > maxHeightPx && chunk.children.length > 0) {
+          chunks.push(chunk);
+          chunk = document.createElement('div');
+          chunk.className = container.className;
+          chunk.style.cssText = container.style.cssText;
+          chunkStartTop = top;
+        }
+        chunk.appendChild(child);
+      });
+      if (chunk.children.length > 0) chunks.push(chunk);
+      return chunks;
+    }
+
+    // Rendert einen Off-Screen-Container in ein Canvas und schneidet es auf
+    // eine oder mehrere Seiten des gemeinsamen jsPDF-Dokuments. Gibt zurück,
+    // ob damit bereits die (von jsPDF automatisch angelegte) erste Seite
+    // verbraucht wurde.
+    async function renderUnitToPdf(pdfDoc, pageSize, marginMm, unitEl, usedFirstPage) {
+      const canvas = await html2canvas(unitEl, {
+        scale: RENDER_SCALE,
+        useCORS: true,
+        logging: false,
+        backgroundColor: '#ffffff',
+      });
+
+      const pxFullHeight = canvas.height;
+      const pxPageHeight = Math.max(1, Math.floor(canvas.width * pageSize.inner.ratio));
+      const nPages = Math.max(1, Math.ceil(pxFullHeight / pxPageHeight));
+
+      const pageCanvas = document.createElement('canvas');
+      const pageCtx = pageCanvas.getContext('2d');
+      pageCanvas.width = canvas.width;
+
+      for (let p = 0; p < nPages; p++) {
+        let sliceHeightPx = pxPageHeight;
+        let pageHeightMm = pageSize.inner.height;
+        if (p === nPages - 1 && pxFullHeight % pxPageHeight !== 0) {
+          sliceHeightPx = pxFullHeight % pxPageHeight;
+          pageHeightMm = (sliceHeightPx * pageSize.inner.width) / canvas.width;
+        }
+        pageCanvas.height = sliceHeightPx;
+        pageCtx.fillStyle = '#ffffff';
+        pageCtx.fillRect(0, 0, pageCanvas.width, sliceHeightPx);
+        pageCtx.drawImage(canvas, 0, p * pxPageHeight, canvas.width, sliceHeightPx, 0, 0, canvas.width, sliceHeightPx);
+
+        if (usedFirstPage) {
+          pdfDoc.addPage();
+        }
+        usedFirstPage = true;
+
+        const imgData = pageCanvas.toDataURL('image/jpeg', 0.95);
+        pdfDoc.addImage(imgData, 'JPEG', marginMm[3], marginMm[0], pageSize.inner.width, pageHeightMm);
+      }
+
+      // Speicher sofort freigeben - wichtig bei langen Büchern.
+      canvas.width = 0;
+      canvas.height = 0;
+      pageCanvas.width = 0;
+      pageCanvas.height = 0;
+
+      return usedFirstPage;
+    }
+
+    async function waitForImages(container) {
+      const imgs = Array.from(container.querySelectorAll('img'));
+      await Promise.all(imgs.map((img) => {
+        if (img.decode) return img.decode().catch(() => {});
+        if (img.complete) return Promise.resolve();
+        return new Promise((resolve) => {
+          img.addEventListener('load', resolve, { once: true });
+          img.addEventListener('error', resolve, { once: true });
+        });
+      }));
+    }
+
+    convertBtn.addEventListener('click', async () => {
+      if (!currentFile) return;
+
+      convertBtn.disabled = true;
+      renderContainer.innerHTML = '';
+
+      try {
+        updateStatus('Entpacke EPUB-Container...', 5);
+        const zip = await JSZip.loadAsync(currentFile);
+
+        // 1. Container.xml auslesen
+        const containerFile = zip.file('META-INF/container.xml');
+        if (!containerFile) throw new Error('Ungültige EPUB-Datei (META-INF/container.xml fehlt).');
+        const containerXml = await containerFile.async('text');
+        const domParser = new DOMParser();
+        const containerDoc = domParser.parseFromString(containerXml, 'application/xml');
+        const rootfileEl = containerDoc.querySelector('rootfile');
+        if (!rootfileEl) throw new Error('OPF-Pfad konnte in container.xml nicht gefunden werden.');
+        const opfPath = rootfileEl.getAttribute('full-path');
+
+        // 2. OPF-Paketdatei laden
+        updateStatus('Lese Buchstruktur (OPF)...', 10);
+        const opfFile = zip.file(opfPath);
+        if (!opfFile) throw new Error(`Paketdatei ${opfPath} nicht im Archiv gefunden.`);
+        const opfXml = await opfFile.async('text');
+        const opfDoc = domParser.parseFromString(opfXml, 'application/xml');
+
+        // Metadaten
+        const titleEl = opfDoc.querySelector('title');
+        const creatorEl = opfDoc.querySelector('creator');
+        const bookTitle = titleEl ? titleEl.textContent.trim() : currentFile.name.replace(/\.epub$/i, '');
+        const bookAuthor = creatorEl ? creatorEl.textContent.trim() : '';
+
+        // Manifest auflösen
+        const manifestItems = {};
+        opfDoc.querySelectorAll('manifest > item').forEach(item => {
+          const id = item.getAttribute('id');
+          const href = item.getAttribute('href');
+          manifestItems[id] = resolveRelativePath(opfPath, href);
+        });
+
+        // Spine-Reihenfolge auflösen
+        const spineItemRefs = Array.from(opfDoc.querySelectorAll('spine > itemref'));
+        if (spineItemRefs.length === 0) throw new Error('Spine enthält keine lesbaren Elemente.');
+
+        // 3. PDF-Dokument & Seitenmaße vorbereiten
+        const pageSize = computePageSize(pageSizeSelect.value, MARGIN_MM);
+        const { jsPDF } = window.jspdf;
+        const pdfDoc = new jsPDF({ unit: 'mm', format: pageSizeSelect.value, orientation: 'portrait' });
+        const fontSizePx = fontSizeSelect.value;
+        let usedFirstPage = false;
+
+        // Deckblatt / Titel - wird genau wie jedes Kapitel einzeln gerendert,
+        // damit der Off-Screen-Container nie das gesamte Buch auf einmal
+        // enthält.
+        updateStatus('Erzeuge Deckblatt...', 12);
+        const titlePage = document.createElement('div');
+        titlePage.className = 'pdf-render-page';
+        titlePage.style.padding = '30px';
+        titlePage.style.fontSize = `${fontSizePx}px`;
+        titlePage.style.paddingTop = '120px';
+        titlePage.style.textAlign = 'center';
+        titlePage.innerHTML = `
+          <h1 style="font-size: 26px; line-height: 1.3; margin-bottom: 15px;">${bookTitle}</h1>
+          ${bookAuthor ? `<p style="font-size: 16px; color: #4b5563;">${bookAuthor}</p>` : ''}
+        `;
+        renderContainer.appendChild(titlePage);
+        usedFirstPage = await renderUnitToPdf(pdfDoc, pageSize, MARGIN_MM, titlePage, usedFirstPage);
+        renderContainer.removeChild(titlePage);
+
+        // 4. Kapitel nacheinander verarbeiten: jedes Kapitel wird einzeln
+        // gerendert und sofort wieder verworfen. So muss nie das gesamte
+        // Buch gleichzeitig als ein einziges (viel zu großes) Canvas
+        // gerastert werden - das führte bei größeren, bebilderten Büchern
+        // bislang zu leeren PDFs (das Canvas überschritt die vom Browser
+        // erlaubte Maximalgröße und blieb dadurch leer).
+        const totalItems = spineItemRefs.length;
+        for (let i = 0; i < totalItems; i++) {
+          const idref = spineItemRefs[i].getAttribute('idref');
+          const itemPath = manifestItems[idref];
+          if (!itemPath) continue;
+
+          const progress = 15 + Math.round((i / totalItems) * 70);
+          updateStatus(`Verarbeite Kapitel ${i + 1} von ${totalItems}...`, progress);
+
+          const chapterFile = zip.file(itemPath);
+          if (!chapterFile) continue;
+
+          const chapterRaw = await chapterFile.async('text');
+          const chapterDoc = domParser.parseFromString(chapterRaw, 'text/html');
+
+          // Relative Pfade von Bildern auflösen und als Base64 Data-URI einbinden
+          const images = chapterDoc.querySelectorAll('img, image');
+          for (const img of images) {
+            const attr = img.hasAttribute('xlink:href') ? 'xlink:href' : 'src';
+            const src = img.getAttribute(attr);
+            if (src && !src.startsWith('data:')) {
+              const absPath = resolveRelativePath(itemPath, src);
+              const imgFile = zip.file(absPath);
+              if (imgFile) {
+                const mime = getMimeType(absPath);
+                const b64 = await imgFile.async('base64');
+                img.setAttribute('src', `data:${mime};base64,${b64}`);
+                if (attr === 'xlink:href') img.removeAttribute('xlink:href');
+              }
+            }
+          }
+
+          const bodyContent = chapterDoc.body ? chapterDoc.body : chapterDoc.documentElement;
+          if (!bodyContent || bodyContent.innerHTML.trim().length === 0) continue;
+
+          const chapterEl = document.createElement('div');
+          chapterEl.className = 'pdf-render-page';
+          chapterEl.style.padding = '30px';
+          chapterEl.style.fontSize = `${fontSizePx}px`;
+          chapterEl.innerHTML = bodyContent.innerHTML;
+
+          renderContainer.appendChild(chapterEl);
+          await waitForImages(chapterEl);
+
+          const chunks = splitIntoRenderChunks(chapterEl, MAX_CHUNK_HEIGHT_PX);
+          for (const chunk of chunks) {
+            if (chunk !== chapterEl) renderContainer.appendChild(chunk);
+            usedFirstPage = await renderUnitToPdf(pdfDoc, pageSize, MARGIN_MM, chunk, usedFirstPage);
+            renderContainer.removeChild(chunk);
+          }
+          renderContainer.innerHTML = '';
+        }
+
+        // 5. PDF speichern
+        updateStatus('Speichere PDF-Datei...', 95);
+
+        const safeFilename = bookTitle
+          .replace(/[\\/:*?"<>|]/g, '_')
+          .trim() || 'Dokument';
+
+        pdfDoc.save(`${safeFilename}.pdf`);
+
+        updateStatus('Erfolgreich umgewandelt und gespeichert!', 100);
+      } catch (err) {
+        console.error(err);
+        updateStatus('Fehler: ' + err.message, 100, true);
+      } finally {
+        renderContainer.innerHTML = '';
+        convertBtn.disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>
