@@ -157,9 +157,9 @@
     const pageSizeSelect = document.getElementById('pageSize');
     const fontSizeSelect = document.getElementById('fontSize');
 
-    const RENDER_WIDTH_PX = 800;       // Breite des Off-Screen-Renders pro Kapitel
-    const RENDER_SCALE = 2;            // html2canvas-Skalierung (Bildqualität)
-    const MAX_CHUNK_HEIGHT_PX = 8000;  // Sicherheitsgrenze: nie ein zu großes Canvas rendern
+    const RENDER_SCALE = 2;               // html2canvas-Skalierung (Bildqualität)
+    const MAX_CHUNK_HEIGHT_PX = 8000;     // max. Höhe eines Render-Abschnitts (CSS-Pixel)
+    const MAX_CANVAS_HEIGHT_PX = 32000;   // harte Obergrenze der Canvas-Höhe (Browser-Limit: 65535)
     const PAGE_FORMATS_MM = {
       a4: [210, 297],
       a5: [148, 210],
@@ -253,81 +253,138 @@
       return { width: widthMm, height: heightMm, inner };
     }
 
+    // Plant die Schnittstellen eines Kapitels: rein messend, ohne das DOM zu
+    // verändern. Das ist entscheidend - würde man Knoten schon während des
+    // Messens verschieben, lieferten die verbleibenden Geschwister ab dem
+    // ersten verschobenen Element nur noch offsetTop 0, und es käme nie zu
+    // einem Schnitt.
+    function planChunks(host, ancestors, maxHeightPx, plans) {
+      // Alle Kindknoten, nicht nur Elemente: die Textknoten dazwischen müssen
+      // mitwandern, sonst verschwindet bei Inline-Inhalten der Wortabstand.
+      const measured = Array.from(host.childNodes).map((node) => ({
+        node,
+        top: node.nodeType === Node.ELEMENT_NODE ? node.offsetTop : null,
+        height: node.nodeType === Node.ELEMENT_NODE ? node.offsetHeight : 0,
+      }));
+
+      let group = [];
+      let groupTop = null;
+      const flush = () => {
+        if (group.length > 0) {
+          plans.push({ ancestors, nodes: group });
+          group = [];
+        }
+        groupTop = null;
+      };
+
+      measured.forEach((m) => {
+        if (m.top === null) {
+          group.push(m.node);
+          return;
+        }
+
+        if (groupTop !== null && m.top + m.height - groupTop > maxHeightPx) {
+          flush();
+        }
+
+        // Ein Element, das für sich allein schon zu hoch ist (z. B. ein <div>,
+        // das ein komplettes Kapitel umschließt), wird eine Ebene tiefer
+        // aufgeteilt.
+        if (m.height > maxHeightPx && m.node.children.length > 1) {
+          flush();
+          planChunks(m.node, ancestors.concat(m.node), maxHeightPx, plans);
+          return;
+        }
+
+        if (groupTop === null) groupTop = m.top;
+        group.push(m.node);
+      });
+      flush();
+    }
+
+    // Leere Kopie der Elternkette, damit CSS-Klassen und Styles der Container
+    // auch in den herausgelösten Abschnitten greifen.
+    function buildChunkShell(ancestors) {
+      const root = ancestors[0].cloneNode(false);
+      let leaf = root;
+      for (let i = 1; i < ancestors.length; i++) {
+        const copy = ancestors[i].cloneNode(false);
+        leaf.appendChild(copy);
+        leaf = copy;
+      }
+      return { root, leaf };
+    }
+
     // Teilt einen bereits ins Layout eingehängten Off-Screen-Container in
     // mehrere kleinere Container (jeweils unter maxHeightPx) auf, damit nie
     // ein einzelner html2canvas-Aufruf ein überdimensioniertes Canvas
     // erzeugen muss. Kindknoten werden verschoben, nicht kopiert - funktioniert
     // also nur einmal pro Container.
     function splitIntoRenderChunks(container, maxHeightPx) {
-      const children = Array.from(container.children);
-      if (children.length === 0 || container.scrollHeight <= maxHeightPx) {
+      if (container.children.length === 0 || container.scrollHeight <= maxHeightPx) {
         return [container];
       }
 
       container.style.position = 'relative';
-      const chunks = [];
-      let chunk = document.createElement('div');
-      chunk.className = container.className;
-      chunk.style.cssText = container.style.cssText;
-      let chunkStartTop = null;
+      const plans = [];
+      planChunks(container, [container], maxHeightPx, plans);
+      if (plans.length <= 1) return [container];
 
-      children.forEach((child) => {
-        const top = child.offsetTop;
-        const bottom = top + child.offsetHeight;
-        if (chunkStartTop === null) chunkStartTop = top;
-
-        if (bottom - chunkStartTop > maxHeightPx && chunk.children.length > 0) {
-          chunks.push(chunk);
-          chunk = document.createElement('div');
-          chunk.className = container.className;
-          chunk.style.cssText = container.style.cssText;
-          chunkStartTop = top;
-        }
-        chunk.appendChild(child);
+      return plans.map((plan) => {
+        const { root, leaf } = buildChunkShell(plan.ancestors);
+        plan.nodes.forEach((node) => leaf.appendChild(node));
+        return root;
       });
-      if (chunk.children.length > 0) chunks.push(chunk);
-      return chunks;
     }
 
-    // Rendert einen Off-Screen-Container in ein Canvas und schneidet es auf
-    // eine oder mehrere Seiten des gemeinsamen jsPDF-Dokuments. Gibt zurück,
-    // ob damit bereits die (von jsPDF automatisch angelegte) erste Seite
-    // verbraucht wurde.
-    async function renderUnitToPdf(pdfDoc, pageSize, marginMm, unitEl, usedFirstPage) {
+    // Rendert einen Off-Screen-Container in ein Canvas und verteilt ihn auf die
+    // Seiten des gemeinsamen jsPDF-Dokuments. `state.filledMm` merkt sich, wie
+    // weit die aktuelle Seite schon gefüllt ist, damit Fortsetzungs-Abschnitte
+    // eines aufgeteilten Kapitels nahtlos anschließen statt eine halb leere
+    // Seite zu hinterlassen. Nur `startNewPage` erzwingt einen Seitenumbruch.
+    async function renderUnitToPdf(pdfDoc, pageSize, marginMm, unitEl, state, startNewPage) {
+      // Harte Absicherung gegen das Canvas-Größenlimit des Browsers (65535 px
+      // pro Kante): notfalls lieber gröber rendern als eine leere Seite.
+      const scale = Math.min(RENDER_SCALE, MAX_CANVAS_HEIGHT_PX / Math.max(1, unitEl.scrollHeight));
       const canvas = await html2canvas(unitEl, {
-        scale: RENDER_SCALE,
+        scale,
         useCORS: true,
         logging: false,
         backgroundColor: '#ffffff',
       });
 
-      const pxFullHeight = canvas.height;
-      const pxPageHeight = Math.max(1, Math.floor(canvas.width * pageSize.inner.ratio));
-      const nPages = Math.max(1, Math.ceil(pxFullHeight / pxPageHeight));
-
+      const pxPerMm = canvas.width / pageSize.inner.width;
       const pageCanvas = document.createElement('canvas');
       const pageCtx = pageCanvas.getContext('2d');
       pageCanvas.width = canvas.width;
 
-      for (let p = 0; p < nPages; p++) {
-        let sliceHeightPx = pxPageHeight;
-        let pageHeightMm = pageSize.inner.height;
-        if (p === nPages - 1 && pxFullHeight % pxPageHeight !== 0) {
-          sliceHeightPx = pxFullHeight % pxPageHeight;
-          pageHeightMm = (sliceHeightPx * pageSize.inner.width) / canvas.width;
+      if (startNewPage && state.hasPage) {
+        pdfDoc.addPage();
+        state.filledMm = 0;
+      }
+      state.hasPage = true;
+
+      let y = 0;
+      while (y < canvas.height) {
+        let availablePx = Math.floor((pageSize.inner.height - state.filledMm) * pxPerMm);
+        if (availablePx < 1) {
+          pdfDoc.addPage();
+          state.filledMm = 0;
+          availablePx = Math.floor(pageSize.inner.height * pxPerMm);
         }
+
+        const sliceHeightPx = Math.min(availablePx, canvas.height - y);
         pageCanvas.height = sliceHeightPx;
         pageCtx.fillStyle = '#ffffff';
         pageCtx.fillRect(0, 0, pageCanvas.width, sliceHeightPx);
-        pageCtx.drawImage(canvas, 0, p * pxPageHeight, canvas.width, sliceHeightPx, 0, 0, canvas.width, sliceHeightPx);
+        pageCtx.drawImage(canvas, 0, y, canvas.width, sliceHeightPx, 0, 0, canvas.width, sliceHeightPx);
 
-        if (usedFirstPage) {
-          pdfDoc.addPage();
-        }
-        usedFirstPage = true;
-
+        const sliceHeightMm = sliceHeightPx / pxPerMm;
         const imgData = pageCanvas.toDataURL('image/jpeg', 0.95);
-        pdfDoc.addImage(imgData, 'JPEG', marginMm[3], marginMm[0], pageSize.inner.width, pageHeightMm);
+        pdfDoc.addImage(imgData, 'JPEG', marginMm[3], marginMm[0] + state.filledMm, pageSize.inner.width, sliceHeightMm);
+
+        state.filledMm += sliceHeightMm;
+        y += sliceHeightPx;
       }
 
       // Speicher sofort freigeben - wichtig bei langen Büchern.
@@ -335,8 +392,6 @@
       canvas.height = 0;
       pageCanvas.width = 0;
       pageCanvas.height = 0;
-
-      return usedFirstPage;
     }
 
     async function waitForImages(container) {
@@ -406,7 +461,7 @@
         const { jsPDF } = window.jspdf;
         const pdfDoc = new jsPDF({ unit: 'mm', format: pageSizeSelect.value, orientation: 'portrait' });
         const fontSizePx = fontSizeSelect.value;
-        let usedFirstPage = false;
+        const pdfState = { hasPage: false, filledMm: 0 };
 
         // Deckblatt / Titel - wird genau wie jedes Kapitel einzeln gerendert,
         // damit der Off-Screen-Container nie das gesamte Buch auf einmal
@@ -423,7 +478,7 @@
           ${bookAuthor ? `<p style="font-size: 16px; color: #4b5563;">${bookAuthor}</p>` : ''}
         `;
         renderContainer.appendChild(titlePage);
-        usedFirstPage = await renderUnitToPdf(pdfDoc, pageSize, MARGIN_MM, titlePage, usedFirstPage);
+        await renderUnitToPdf(pdfDoc, pageSize, MARGIN_MM, titlePage, pdfState, true);
         renderContainer.removeChild(titlePage);
 
         // 4. Kapitel nacheinander verarbeiten: jedes Kapitel wird einzeln
@@ -476,10 +531,13 @@
           renderContainer.appendChild(chapterEl);
           await waitForImages(chapterEl);
 
+          // Jedes Kapitel beginnt auf einer neuen Seite; die Abschnitte eines
+          // aufgeteilten Kapitels schließen dagegen nahtlos aneinander an.
           const chunks = splitIntoRenderChunks(chapterEl, MAX_CHUNK_HEIGHT_PX);
-          for (const chunk of chunks) {
+          for (let c = 0; c < chunks.length; c++) {
+            const chunk = chunks[c];
             if (chunk !== chapterEl) renderContainer.appendChild(chunk);
-            usedFirstPage = await renderUnitToPdf(pdfDoc, pageSize, MARGIN_MM, chunk, usedFirstPage);
+            await renderUnitToPdf(pdfDoc, pageSize, MARGIN_MM, chunk, pdfState, c === 0);
             renderContainer.removeChild(chunk);
           }
           renderContainer.innerHTML = '';
